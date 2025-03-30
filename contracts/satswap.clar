@@ -388,3 +388,79 @@
     
     (ok shares-to-mint))
 )
+
+(define-public (swap-exact-x-for-y (pool-id uint) (token-x <ft-trait>) (token-y <ft-trait>) (amount-x uint) (min-y uint))
+    (let (
+        (pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND))
+        (swap-output (unwrap! (calculate-swap-output pool-id amount-x true) ERR-POOL-NOT-FOUND))
+        (output-amount (get output swap-output))
+        (fee-amount (get fee swap-output))
+    )
+    
+    ;; Validations
+    (asserts! (is-eq (contract-of token-x) (get token-x pool)) ERR-INVALID-PAIR)
+    (asserts! (is-eq (contract-of token-y) (get token-y pool)) ERR-INVALID-PAIR)
+    (asserts! (>= output-amount min-y) ERR-MIN-TOKENS)
+    (asserts! (check-price-impact amount-x (get reserve-x pool)) ERR-PRICE-IMPACT-HIGH)
+    
+    ;; Transfer tokens
+    (try! (contract-call? token-x transfer amount-x tx-sender (as-contract tx-sender) none))
+    (try! (as-contract (contract-call? token-y transfer output-amount (as-contract tx-sender) tx-sender none)))
+    
+    ;; Update pool
+    (map-set pools
+        { pool-id: pool-id }
+        (merge pool {
+            reserve-x: (+ (get reserve-x pool) amount-x),
+            reserve-y: (- (get reserve-y pool) output-amount),
+            last-block: block-height
+        })
+    )
+    
+    ;; Update protocol fees
+    (var-set total-fees-collected (+ (var-get total-fees-collected) fee-amount))
+    
+    (ok output-amount))
+)
+
+
+;; Governance functions
+
+;; Update stake-governance to use the variable governance token
+;; Governance functions
+(define-public (stake-governance (token <ft-trait>) (amount uint) (lock-blocks uint))
+    (let 
+        (
+            (current-stake (default-to 
+                {
+                    amount: u0, 
+                    power: u0, 
+                    lock-until: u0, 
+                    delegation: none
+                } 
+                (map-get? governance-stakes { staker: tx-sender })
+            ))
+            (gov-token (unwrap! (var-get governance-token) ERR-GOVERNANCE-TOKEN-NOT-SET))
+            (power (* amount (+ u1 (/ lock-blocks u1000))))
+        )
+        
+        ;; Verify correct token
+        (asserts! (is-eq (contract-of token) gov-token) ERR-NOT-AUTHORIZED)
+        
+        ;; Transfer governance tokens
+        (try! (contract-call? token transfer amount tx-sender (as-contract tx-sender) none))
+        
+        ;; Update stake
+        (map-set governance-stakes
+            { staker: tx-sender }
+            {
+                amount: (+ (get amount current-stake) amount),
+                power: (+ (get power current-stake) power),
+                lock-until: (+ block-height lock-blocks),
+                delegation: (get delegation current-stake)
+            }
+        )
+        
+        (ok power)
+    )
+)
