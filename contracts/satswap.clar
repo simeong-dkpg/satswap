@@ -280,3 +280,111 @@
         (err ERR-NOT-AUTHORIZED)
     )
 )
+
+
+;; Public functions
+
+;; Updated public functions with proper trait handling
+
+(define-public (create-pool (token-x <ft-trait>) (token-y <ft-trait>) (initial-x uint) (initial-y uint))
+    (let (
+        (pool-id (var-get next-pool-id))
+        (token-x-principal (contract-of token-x))
+        (token-y-principal (contract-of token-y))
+    )
+    (asserts! (not (is-eq token-x-principal token-y-principal)) ERR-INVALID-PAIR)
+    (asserts! (> initial-x u0) ERR-ZERO-LIQUIDITY)
+    (asserts! (> initial-y u0) ERR-ZERO-LIQUIDITY)
+    
+    ;; Transfer initial liquidity
+    (try! (contract-call? token-x transfer initial-x tx-sender (as-contract tx-sender) none))
+    (try! (contract-call? token-y transfer initial-y tx-sender (as-contract tx-sender) none))
+    
+    ;; Create pool
+    (map-set pools 
+        { pool-id: pool-id }
+        (tuple
+            (token-x token-x-principal)
+            (token-y token-y-principal)
+            (reserve-x initial-x)
+            (reserve-y initial-y)
+            (total-supply INITIAL-LIQUIDITY-TOKENS)
+            (fee-rate u30) ;; 0.3% default fee
+            (last-block block-height)
+            (cumulative-fee-x u0)
+            (cumulative-fee-y u0)
+            (price-cumulative-last u0)
+            (price-timestamp block-height)
+            (twap u0)
+        )
+    )
+    
+    ;; Set initial liquidity provider
+    (map-set liquidity-providers
+        { pool-id: pool-id, provider: tx-sender }
+        {
+            shares: INITIAL-LIQUIDITY-TOKENS,
+            rewards-claimed: u0,
+            staked-amount: u0,
+            last-stake-block: block-height,
+            fee-growth-checkpoint-x: u0,
+            fee-growth-checkpoint-y: u0,
+            unclaimed-fees-x: u0,
+            unclaimed-fees-y: u0
+        }
+    )
+    
+    ;; Increment pool ID
+    (var-set next-pool-id (+ pool-id u1))
+    (ok pool-id)))
+
+(define-public (add-liquidity (pool-id uint) (token-x <ft-trait>) (token-y <ft-trait>) (amount-x uint) (amount-y uint) (min-shares uint))
+    (let (
+        (pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND))
+        (shares-to-mint (calculate-liquidity-shares amount-x amount-y (get reserve-x pool) (get reserve-y pool) (get total-supply pool)))
+    )
+    ;; Validate token addresses match pool
+    (asserts! (is-eq (contract-of token-x) (get token-x pool)) ERR-INVALID-PAIR)
+    (asserts! (is-eq (contract-of token-y) (get token-y pool)) ERR-INVALID-PAIR)
+    (asserts! (>= shares-to-mint min-shares) ERR-MIN-TOKENS)
+    
+    ;; Transfer tokens
+    (try! (contract-call? token-x transfer amount-x tx-sender (as-contract tx-sender) none))
+    (try! (contract-call? token-y transfer amount-y tx-sender (as-contract tx-sender) none))
+    
+    ;; Update pool
+    (map-set pools
+        { pool-id: pool-id }
+        (merge pool {
+            reserve-x: (+ (get reserve-x pool) amount-x),
+            reserve-y: (+ (get reserve-y pool) amount-y),
+            total-supply: (+ (get total-supply pool) shares-to-mint)
+        })
+    )
+    
+    ;; Update provider
+    (match (map-get? liquidity-providers { pool-id: pool-id, provider: tx-sender })
+        prev-balance
+        (map-set liquidity-providers
+            { pool-id: pool-id, provider: tx-sender }
+            (merge prev-balance {
+                shares: (+ (get shares prev-balance) shares-to-mint)
+            })
+        )
+        (map-set liquidity-providers
+            { pool-id: pool-id, provider: tx-sender }
+            {
+                shares: shares-to-mint,
+                rewards-claimed: u0,
+                staked-amount: u0,
+                last-stake-block: block-height,
+                fee-growth-checkpoint-x: u0,
+                fee-growth-checkpoint-y: u0,
+                unclaimed-fees-x: u0,
+                unclaimed-fees-y: u0
+            }
+        )
+    )
+    
+    (ok shares-to-mint))
+)
