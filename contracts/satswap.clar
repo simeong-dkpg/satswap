@@ -606,3 +606,60 @@
     
     (ok true))
 )
+
+;; Price oracle functions
+
+(define-public (update-price-oracle (pool-id uint))
+    (let (
+        (pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND))
+        (time-elapsed (- block-height (get price-timestamp pool)))
+        (price-cumulative (* (/ (get reserve-y pool) (get reserve-x pool)) time-elapsed))
+    )
+    
+    (map-set pools
+        { pool-id: pool-id }
+        (merge pool {
+            price-cumulative-last: (+ (get price-cumulative-last pool) price-cumulative),
+            price-timestamp: block-height,
+            twap: (/ price-cumulative time-elapsed)
+        })
+    )
+    
+    (var-set price-oracle-last-update block-height)
+    (ok true))
+)
+
+;; Enhanced governance functions
+
+(define-public (delegate-votes (delegate-to principal))
+    (let (
+        (current-stake (unwrap! (map-get? governance-stakes { staker: tx-sender }) ERR-NOT-AUTHORIZED))
+    )
+    
+    (map-set governance-stakes
+        { staker: tx-sender }
+        (merge current-stake {
+            delegation: (some delegate-to)
+        })
+    )
+    
+    (ok true))
+)
+
+(define-public (propose-parameter-change (parameter-name (string-ascii 64)) (new-value uint))
+    (let (
+        (proposer-stake (unwrap! (map-get? governance-stakes { staker: tx-sender }) ERR-NOT-AUTHORIZED))
+    )
+    
+    ;; Check if proposer has enough stake
+    (asserts! (>= (get power proposer-stake) (var-get governance-threshold)) ERR-NOT-AUTHORIZED)
+    
+    ;; Implement proposal logic here
+    
+    (ok true))
+)
+
+;; Add a trait definition for the flash loan callback
+(define-trait flash-loan-callback-trait
+    ((execute-flash-swap (uint uint) (response bool uint)))
+)
