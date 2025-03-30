@@ -76,3 +76,46 @@
 (define-data-var price-oracle-last-update uint u0)
 (define-data-var governance-threshold uint u1000000)
 (define-data-var governance-token (optional principal) none)
+
+;; Data maps for storing pool information
+(define-map pools 
+    { pool-id: uint }
+    {
+        token-x: principal,
+        token-y: principal,
+        reserve-x: uint,
+        reserve-y: uint,
+        total-supply: uint,
+        fee-rate: uint,
+        last-block: uint,
+        cumulative-fee-x: uint,
+        cumulative-fee-y: uint,
+        price-cumulative-last: uint,
+        price-timestamp: uint,
+        twap: uint
+    }
+)
+
+(define-map liquidity-providers
+    { pool-id: uint, provider: principal }
+    {
+        shares: uint,
+        rewards-claimed: uint,
+        staked-amount: uint,
+        last-stake-block: uint,
+        fee-growth-checkpoint-x: uint,
+        fee-growth-checkpoint-y: uint,
+        unclaimed-fees-x: uint,
+        unclaimed-fees-y: uint
+    }
+)
+
+(define-map governance-stakes
+    { staker: principal }
+    {
+        amount: uint,
+        power: uint,
+        lock-until: uint,
+        delegation: (optional principal)
+    }
+)
