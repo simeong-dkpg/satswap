@@ -464,3 +464,80 @@
         (ok power)
     )
 )
+
+;; Add governance token management functions
+(define-public (set-governance-token (token principal))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (ok (var-set governance-token (some token)))
+    )
+)
+
+(define-public (get-governance-token)
+    (ok (var-get governance-token))
+)
+
+;; Emergency functions
+
+(define-public (toggle-emergency-shutdown)
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+        (ok (var-set emergency-shutdown (not (var-get emergency-shutdown))))
+    )
+)
+
+;; Enhanced swap functions with flash loan support
+
+(define-public (flash-swap (pool-id uint) (token-x <ft-trait>) (token-y <ft-trait>) (amount-x uint) (callback-contract principal))
+    (let (
+        (pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND))
+        (loan-id (var-get next-loan-id))
+        (fee (* amount-x FLASH-LOAN-FEE))
+    )
+    ;; Validate token matches pool
+    (asserts! (is-eq (contract-of token-x) (get token-x pool)) ERR-INVALID-PAIR)
+    (asserts! (is-eq (contract-of token-y) (get token-y pool)) ERR-INVALID-PAIR)
+    
+    ;; Create flash loan record
+    (map-set flash-loans
+        { loan-id: loan-id }
+        {
+            borrower: tx-sender,
+            amount: amount-x,
+            token: (contract-of token-x),
+            due-block: (+ block-height u1)
+        }
+    )
+    
+    ;; Transfer tokens to borrower
+    (try! (as-contract (contract-call? token-x transfer 
+        amount-x 
+        (as-contract tx-sender) 
+        tx-sender 
+        none)))
+    
+    ;; Execute callback
+    (try! (contract-call? callback-contract execute-flash-swap loan-id pool-id))
+    
+    ;; Verify repayment
+    (let ((updated-pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND)))
+        (asserts! (>= (get reserve-x updated-pool) (+ amount-x fee)) ERR-FLASH-LOAN-FAILED)
+        
+        ;; Update state
+        (var-set next-loan-id (+ loan-id u1))
+        (var-set total-fees-collected (+ (var-get total-fees-collected) fee))
+        
+        (ok loan-id)))
+)
+
+;; Update the flash loan callbacks
+(define-public (execute-flash-swap (loan-id uint) (pool-id uint))
+    (let ((loan (unwrap! (map-get? flash-loans { loan-id: loan-id }) ERR-POOL-NOT-FOUND)))
+        (asserts! (is-eq tx-sender (get borrower loan)) ERR-NOT-AUTHORIZED)
+        (asserts! (<= block-height (get due-block loan)) ERR-EXPIRED)
+        
+        ;; Implementation specific to the callback
+        ;; This should be implemented by the contract calling flash-swap
+        
+        (ok true))
+)
