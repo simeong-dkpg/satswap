@@ -204,3 +204,79 @@
     
     (ok true))
 )
+
+(define-private (check-and-execute-swap (pool-id uint) (amount-in uint))
+    (let (
+        (pool (unwrap! (map-get? pools { pool-id: pool-id }) ERR-POOL-NOT-FOUND))
+        (output (unwrap! (calculate-swap-output pool-id amount-in true) ERR-POOL-NOT-FOUND))
+    )
+    
+    ;; Execute swap
+    (try! (execute-single-swap pool-id amount-in (get output output)))
+    
+    (ok (get output output)))
+)
+
+;; Read-only functions
+(define-read-only (get-pool-details (pool-id uint))
+    (match (map-get? pools { pool-id: pool-id })
+        pool-info (ok pool-info)
+        (err ERR-POOL-NOT-FOUND)
+    )
+)
+
+(define-read-only (get-twap-price (pool-id uint))
+    (match (map-get? pools { pool-id: pool-id })
+        pool-info 
+        (let (
+            (time-elapsed (- block-height (get price-timestamp pool-info)))
+        )
+        (if (>= time-elapsed ORACLE-VALIDITY-PERIOD)
+            (err ERR-ORACLE-STALE)
+            (ok (get twap pool-info))))
+        (err ERR-POOL-NOT-FOUND)
+    )
+)
+
+(define-read-only (calculate-swap-output (pool-id uint) (input-amount uint) (is-x-to-y bool))
+    (match (map-get? pools { pool-id: pool-id })
+        pool-info 
+        (let (
+            (reserve-in (if is-x-to-y (get reserve-x pool-info) (get reserve-y pool-info)))
+            (reserve-out (if is-x-to-y (get reserve-y pool-info) (get reserve-x pool-info)))
+            (fee-adjustment (- FEE-DENOMINATOR (get fee-rate pool-info)))
+        )
+        (ok {
+            output: (/ (* input-amount (* reserve-out fee-adjustment)) 
+                      (+ (* reserve-in FEE-DENOMINATOR) (* input-amount fee-adjustment))),
+            fee: (/ (* input-amount (get fee-rate pool-info)) FEE-DENOMINATOR)
+        }))
+        (err ERR-POOL-NOT-FOUND)
+    )
+)
+
+(define-read-only (calculate-rewards (pool-id uint) (staker principal))
+    (match (map-get? liquidity-providers { pool-id: pool-id, provider: staker })
+        provider-info
+        (match (map-get? yield-farms { pool-id: pool-id })
+            farm
+            (let (
+                (blocks-elapsed (- block-height (get last-stake-block provider-info)))
+                (reward-rate (get reward-per-block farm))
+                (stake-amount (get staked-amount provider-info))
+                (total-staked (get total-staked farm))
+            )
+            (ok (if (is-eq total-staked u0)
+                u0
+                (* (* blocks-elapsed reward-rate) (/ stake-amount total-staked)))))
+            (err ERR-POOL-NOT-FOUND))
+        (err ERR-NOT-AUTHORIZED)
+    )
+)
+
+(define-read-only (get-provider-info (pool-id uint) (provider principal))
+    (match (map-get? liquidity-providers { pool-id: pool-id, provider: provider })
+        provider-info (ok provider-info)
+        (err ERR-NOT-AUTHORIZED)
+    )
+)
